@@ -56,6 +56,9 @@
   .search input:focus{outline:none; border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-soft)}
   .search svg{position:absolute; left:11px; top:50%; transform:translateY(-50%); color:var(--muted)}
   .updated{font-size:12px; color:var(--muted)}
+  .seg{display:inline-flex; background:#eceef2; border-radius:10px; padding:3px; flex:none}
+  .seg-btn{border:none; background:transparent; padding:7px 15px; border-radius:8px; font-size:13.5px; font-weight:700; color:var(--muted); cursor:pointer; transition:.15s}
+  .seg-btn.active{background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.1)}
 
   /* summary chips */
   .summary{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px}
@@ -81,6 +84,8 @@
   }
   tbody td{padding:10px 14px; border-top:1px solid var(--line); vertical-align:middle}
   tbody tr:hover{background:#fafbfe}
+  tr.subhead td{background:#f4f6fb; font-weight:800; font-size:12px; color:var(--brand); padding:8px 14px; letter-spacing:.2px}
+  tr.subhead:hover td{background:#f4f6fb}
   .name{font-weight:700}
   .grade{display:inline-block; font-size:11.5px; color:var(--muted); margin-left:6px; font-weight:500}
   a.tel{color:var(--ink); text-decoration:none; font-variant-numeric:tabular-nums; border-bottom:1px dashed transparent}
@@ -134,6 +139,10 @@
 
   <!-- TOOLBAR -->
   <div class="toolbar hidden" id="toolbar">
+    <div class="seg">
+      <button class="seg-btn active" id="segClass" onclick="setView('class')">반별</button>
+      <button class="seg-btn" id="segTeacher" onclick="setView('teacher')">선생님별</button>
+    </div>
     <div class="search">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <input type="text" id="search" placeholder="학생 이름 · 반 · 전화번호 검색" oninput="render()">
@@ -170,7 +179,7 @@ const FC = {
 };
 const LS_KEY = "mathspace_airtable_pat";
 
-let DATA = { classes:[], collapsed:false };
+let DATA = { classes:[], collapsed:false, view:"class" };
 
 /* ===== 토큰 ===== */
 function getToken(){ return localStorage.getItem(LS_KEY) || ""; }
@@ -264,46 +273,83 @@ function telCell(label, num){
   return `<td><span class="lbl">${label}</span><a class="tel" href="tel:${clean}">${esc(num)}</a></td>`;
 }
 
+function studentRow(s){
+  return `
+    <tr>
+      <td class="name"><span class="lbl">이름</span>${esc(s.name)}${s.grade?`<span class="grade">${esc(s.grade)}</span>`:""}</td>
+      ${telCell("학생", s.stuTel)}
+      ${telCell("어머니", s.momTel)}
+      ${telCell("아버지", s.dadTel)}
+    </tr>`;
+}
+
+// 뷰에 따라 상위 그룹 구성. 각 그룹: {title, teacher, isTeacher, sections:[{label, students}]}
+function getGroups(){
+  if(DATA.view === "teacher"){
+    const map = {};
+    DATA.classes.forEach(c=>{
+      if(c.key === "__none__") return; // 미배정은 선생님별에서 제외
+      const t = c.teacher || "담당 미지정";
+      if(!map[t]) map[t] = { title:t, isTeacher:true, sections:[] };
+      map[t].sections.push({ label:c.name, students:c.students });
+    });
+    const arr = Object.values(map);
+    arr.forEach(g=> g.sections.sort((a,b)=> a.label.localeCompare(b.label,"ko",{numeric:true})));
+    arr.sort((a,b)=>{
+      if(a.title==="담당 미지정") return 1; if(b.title==="담당 미지정") return -1;
+      return a.title.localeCompare(b.title,"ko");
+    });
+    return arr;
+  }
+  return DATA.classes.map(c=>({ title:c.name, teacher:c.teacher, isTeacher:false, sections:[{label:null, students:c.students}] }));
+}
+
 function render(){
   const q = (document.getElementById("search").value||"").trim().toLowerCase();
   const content = document.getElementById("content");
+  const groups = getGroups();
 
-  let totalStu = 0, shownStu = 0, shownCls = 0;
-  DATA.classes.forEach(g=> totalStu += g.students.length);
+  let totalStu = 0; DATA.classes.forEach(g=> totalStu += g.students.length);
+  let shownStu = 0, shownGroups = 0;
 
   let html = "";
-  DATA.classes.forEach((g, idx)=>{
-    let studs = g.students;
-    if(q){
-      studs = studs.filter(s=>
-        s.name.toLowerCase().includes(q) ||
-        g.name.toLowerCase().includes(q) ||
-        (s.stuTel+ s.momTel + s.dadTel).toLowerCase().includes(q)
-      );
-    }
-    if(q && studs.length===0) return;
-    shownCls++; shownStu += studs.length;
+  groups.forEach(g=>{
+    let gCount = 0, secShown = 0, body = "";
+    g.sections.forEach(sec=>{
+      let studs = sec.students;
+      if(q){
+        studs = studs.filter(s=>
+          s.name.toLowerCase().includes(q) ||
+          g.title.toLowerCase().includes(q) ||
+          (sec.label||"").toLowerCase().includes(q) ||
+          (s.stuTel + s.momTel + s.dadTel).toLowerCase().includes(q)
+        );
+      }
+      if(studs.length === 0) return;
+      secShown++; gCount += studs.length;
+      if(sec.label) body += `<tr class="subhead"><td colspan="4">${esc(sec.label)} · ${studs.length}명</td></tr>`;
+      body += studs.map(studentRow).join("");
+    });
+    if(gCount === 0) return;
+    shownGroups++; shownStu += gCount;
 
-    const rows = studs.map(s=>`
-      <tr>
-        <td class="name"><span class="lbl">이름</span>${esc(s.name)}${s.grade?`<span class="grade">${esc(s.grade)}</span>`:""}</td>
-        ${telCell("학생", s.stuTel)}
-        ${telCell("어머니", s.momTel)}
-        ${telCell("아버지", s.dadTel)}
-      </tr>`).join("");
+    const chip = g.isTeacher
+      ? `<span class="cls-teacher">${secShown}개 반</span>`
+      : (g.teacher ? `<span class="cls-teacher">${esc(g.teacher)} 선생님</span>` : "");
+    const title = g.isTeacher ? esc(g.title)+" 선생님" : esc(g.title);
 
     html += `
       <div class="cls${DATA.collapsed?' collapsed':''}">
         <div class="cls-head" onclick="this.parentNode.classList.toggle('collapsed')">
           <svg class="caret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
-          <span class="cls-name">${esc(g.name)}</span>
-          ${g.teacher?`<span class="cls-teacher">${esc(g.teacher)} 선생님</span>`:""}
-          <span class="cls-count">${studs.length}명</span>
+          <span class="cls-name">${title}</span>
+          ${chip}
+          <span class="cls-count">${gCount}명</span>
         </div>
         <div class="cls-body">
           <table>
             <thead><tr><th>이름</th><th>학생 번호</th><th>어머니 번호</th><th>아버지 번호</th></tr></thead>
-            <tbody>${rows}</tbody>
+            <tbody>${body}</tbody>
           </table>
         </div>
       </div>`;
@@ -313,10 +359,11 @@ function render(){
   content.innerHTML = html;
 
   // summary
+  const groupLabel = DATA.view==="teacher" ? "선생님" : "반";
   const sum = document.getElementById("summary");
   sum.classList.remove("hidden");
   sum.innerHTML = `
-    <div class="chip"><div class="n">${shownCls}</div><div class="l">${q?'검색된 반':'전체 반'}</div></div>
+    <div class="chip"><div class="n">${shownGroups}</div><div class="l">${q?'검색된 '+groupLabel:'전체 '+groupLabel}</div></div>
     <div class="chip"><div class="n">${shownStu}</div><div class="l">${q?'검색된 학생':'재원생 합계'}</div></div>
     ${q?`<div class="chip"><div class="n">${totalStu}</div><div class="l">전체 재원생</div></div>`:''}
   `;
@@ -330,6 +377,13 @@ function render(){
 function toggleAll(){
   DATA.collapsed = !DATA.collapsed;
   document.getElementById("toggleAllTxt").textContent = DATA.collapsed ? "모두 펼치기" : "모두 접기";
+  render();
+}
+
+function setView(v){
+  DATA.view = v;
+  document.getElementById("segClass").classList.toggle("active", v==="class");
+  document.getElementById("segTeacher").classList.toggle("active", v==="teacher");
   render();
 }
 

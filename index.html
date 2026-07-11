@@ -76,6 +76,9 @@
   .caret{transition:.2s; color:var(--muted); flex:none}
   .cls.collapsed .caret{transform:rotate(-90deg)}
   .cls.collapsed .cls-body{display:none}
+  .cls--teacher.collapsed .cls-count{display:none} /* 선생님별: 접혀 있으면 인원수 숨김 */
+  .cls--teacher .cls-hint{margin-left:auto; font-size:12px; color:var(--muted)}
+  .cls--teacher:not(.collapsed) .cls-hint{display:none}
 
   table{width:100%; border-collapse:collapse; font-size:13.5px}
   thead th{
@@ -88,6 +91,7 @@
   tr.subhead:hover td{background:#f4f6fb}
   .name{font-weight:700}
   .grade{display:inline-block; font-size:11.5px; color:var(--muted); margin-left:6px; font-weight:500}
+  .school{display:inline-block; font-size:12.5px; font-weight:600; color:#3a4250; background:#eef1f6; padding:2px 9px; border-radius:6px}
   a.tel{color:var(--ink); text-decoration:none; font-variant-numeric:tabular-nums; border-bottom:1px dashed transparent}
   a.tel:hover{color:var(--brand); border-bottom-color:var(--brand)}
   .none{color:#b6bac2}
@@ -164,10 +168,12 @@
 const BASE_ID = "appxMMBoetYF4u2eO";
 const T_STUDENT = "tblWxg7O3LENNoFhS"; // 학생별
 const T_CLASS   = "tbl4H2KDmJP0gVniY"; // 반별
+const T_SCHOOL  = "tblkFOBQewc6GPtVm"; // 학교별
 const F = {
   name:   "fld9th9v7T5NXykNa", // 이름
   grade:  "flddWDsSawpSRZsTv", // 학년
   cls:    "fldRgJvxEkgxzLpk1", // 반 (링크)
+  school: "fld38X6Mm0ao1PSYj", // 학교 (링크)
   stuTel: "fldUbqM9yaUfg9t83", // 학생 번호
   momTel: "fldrDm87pUr8Z77hN", // 어머니 번호
   dadTel: "fldSrQtnXhS4TYIg0", // 아버지 번호
@@ -177,6 +183,7 @@ const FC = {
   cname:   "fldJWIyfEAtE9lhYQ", // 반 이름
   teacher: "fldwhQ9bIUi4Smb4e", // 담당 선생님
 };
+const FS_NAME = "fldGePCJIigrBqJWM"; // 학교별 이름
 const LS_KEY = "mathspace_airtable_pat";
 
 let DATA = { classes:[], collapsed:false, view:"class" };
@@ -219,13 +226,17 @@ async function loadAll(){
 
   setLoading();
   try{
-    const [clsRecs, stuRecs] = await Promise.all([ fetchTable(T_CLASS), fetchTable(T_STUDENT) ]);
+    const [clsRecs, stuRecs, schRecs] = await Promise.all([ fetchTable(T_CLASS), fetchTable(T_STUDENT), fetchTable(T_SCHOOL) ]);
 
     // 반 id -> {name, teacher}
     const clsMap = {};
     clsRecs.forEach(r=>{
       clsMap[r.id] = { name: val(r, FC.cname) || "(이름없음)", teacher: val(r, FC.teacher) || "" };
     });
+
+    // 학교 id -> 이름
+    const schMap = {};
+    schRecs.forEach(r=>{ schMap[r.id] = val(r, FS_NAME) || ""; });
 
     // 재원생만, 반별 그룹
     const groups = {}; // key -> {id,name,teacher,students:[]}
@@ -239,9 +250,12 @@ async function loadAll(){
         const info = clsId ? (clsMap[clsId] || {name:"(삭제된 반)",teacher:""}) : {name:"미배정",teacher:""};
         groups[key] = { name:info.name, teacher:info.teacher, students:[] };
       }
+      const schLink = val(r, F.school);
+      const schId = Array.isArray(schLink) && schLink.length ? schLink[0] : null;
       groups[key].students.push({
         name:  val(r, F.name) || "(이름없음)",
         grade: val(r, F.grade) || "",
+        school: schId ? (schMap[schId] || "") : "",
         stuTel: val(r, F.stuTel) || "",
         momTel: val(r, F.momTel) || "",
         dadTel: val(r, F.dadTel) || "",
@@ -277,6 +291,7 @@ function studentRow(s){
   return `
     <tr>
       <td class="name"><span class="lbl">이름</span>${esc(s.name)}${s.grade?`<span class="grade">${esc(s.grade)}</span>`:""}</td>
+      <td><span class="lbl">학교</span>${s.school?`<span class="school">${esc(s.school)}</span>`:'<span class="none">—</span>'}</td>
       ${telCell("학생", s.stuTel)}
       ${telCell("어머니", s.momTel)}
       ${telCell("아버지", s.dadTel)}
@@ -322,12 +337,13 @@ function render(){
           s.name.toLowerCase().includes(q) ||
           g.title.toLowerCase().includes(q) ||
           (sec.label||"").toLowerCase().includes(q) ||
+          (s.school||"").toLowerCase().includes(q) ||
           (s.stuTel + s.momTel + s.dadTel).toLowerCase().includes(q)
         );
       }
       if(studs.length === 0) return;
       secShown++; gCount += studs.length;
-      if(sec.label) body += `<tr class="subhead"><td colspan="4">${esc(sec.label)} · ${studs.length}명</td></tr>`;
+      if(sec.label) body += `<tr class="subhead"><td colspan="5">${esc(sec.label)} · ${studs.length}명</td></tr>`;
       body += studs.map(studentRow).join("");
     });
     if(gCount === 0) return;
@@ -337,18 +353,21 @@ function render(){
       ? `<span class="cls-teacher">${secShown}개 반</span>`
       : (g.teacher ? `<span class="cls-teacher">${esc(g.teacher)} 선생님</span>` : "");
     const title = g.isTeacher ? esc(g.title)+" 선생님" : esc(g.title);
+    const hint = g.isTeacher ? `<span class="cls-hint">눌러서 보기 ›</span>` : "";
+    const collapsedNow = DATA.collapsed && !q;
 
     html += `
-      <div class="cls${DATA.collapsed?' collapsed':''}">
+      <div class="cls${collapsedNow?' collapsed':''}${g.isTeacher?' cls--teacher':''}">
         <div class="cls-head" onclick="this.parentNode.classList.toggle('collapsed')">
           <svg class="caret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
           <span class="cls-name">${title}</span>
           ${chip}
+          ${hint}
           <span class="cls-count">${gCount}명</span>
         </div>
         <div class="cls-body">
           <table>
-            <thead><tr><th>이름</th><th>학생 번호</th><th>어머니 번호</th><th>아버지 번호</th></tr></thead>
+            <thead><tr><th>이름</th><th>학교</th><th>학생 번호</th><th>어머니 번호</th><th>아버지 번호</th></tr></thead>
             <tbody>${body}</tbody>
           </table>
         </div>
@@ -382,8 +401,10 @@ function toggleAll(){
 
 function setView(v){
   DATA.view = v;
+  DATA.collapsed = (v === "teacher"); // 선생님별은 기본 접힘 → 눌러야 인원·명단 표시
   document.getElementById("segClass").classList.toggle("active", v==="class");
   document.getElementById("segTeacher").classList.toggle("active", v==="teacher");
+  document.getElementById("toggleAllTxt").textContent = DATA.collapsed ? "모두 펼치기" : "모두 접기";
   render();
 }
 
